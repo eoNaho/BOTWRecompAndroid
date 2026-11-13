@@ -1,0 +1,9 @@
+Source: https://github.com/SciresM/hactool
+Revision: 1d64a83450e025622f3468c28fc4164dad2c5ef6
+License: ISC (see LICENSE)
+Bundled dependency: mbed TLS 2.6.1 (Apache-2.0; see mbedtls/LICENSE)
+
+The importer links hactool's format and NCA routines into the Android runtime. It does not ship keys or game data.
+Local changes: fix unaligned BKTR reads; close and report failed writes and relocation reads; free PFS0 parsing buffers;
+do not print key values in parser diagnostics. The Android build redirects CLI exit() calls to the importer's error guard.
+The bundled Mbed TLS CMake check reads config.h without rewriting it, so simultaneous builds cannot truncate it.

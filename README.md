@@ -65,8 +65,9 @@ Windows, Linux or macOS may still be used as development hosts with the Android 
 
 > [!NOTE]
 > **No game files or DLC are included.** You need your own legally obtained, extracted game files (`exefs` and
-> `romfs`). The app does not open NSP/XCI files or use `prod.keys`. Instructions on obtaining game files are not
-> provided.
+> `romfs`). An experimental importer accepts an NSP/XCI base game and an optional update selected together; a separate
+> importer accepts the Expansion Pass data. It uses the `prod.keys` selected by the user, stored in private app storage.
+> These archive import paths still need validation with real game files. Instructions on obtaining game files are not provided.
 
 ## Touch Controls Overhaul
 
@@ -108,6 +109,18 @@ icons read from your game files. The game's menus keep the classic buttons.
 4. On Adreno phones, a Mesa Turnip driver can perform better than the system driver. Select it under **Settings >
    Files > Vulkan driver**. If the app reports that the Vulkan driver is too old at startup, long-press the app icon
    and choose **Choose driver** before launching the game.
+
+### Importing NSP/XCI files (experimental)
+
+In **Game Files**, choose **Choose prod.keys**, then **Import NSP/XCI**. Select the base game and, if using an update,
+select the base and update files together in the picker. An update cannot be installed without its matching base game.
+The import needs temporary space for the selected game and update plus the resulting image; the app checks the space
+available before extraction. A personalized ticket is not supported.
+
+For the Expansion Pass, choose **Import DLC NSP/XCI** and select the package containing the larger
+`01007EF00011F001` data pack. It provides the data used by both add-ons; the separate `01007EF00011F002` package is
+only an unlock and cannot be imported alone. Use game version 1.6.0 or newer. **Delete saved prod.keys** removes the
+app's stored copy of the key file.
 
 Updating from 0.2.x to 0.4.0-beta does not require rebuilding game code. Shaders compile again once, so the first
 minutes may stutter. To report a problem, open an [issue](https://github.com/mamcjr/BOTWRecompAndroid/issues) with

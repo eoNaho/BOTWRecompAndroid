@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <string>
 #include <sys/stat.h>
@@ -47,6 +48,7 @@ extern "C" {
 #include "gamebuild.h"
 #include "gamelib.h"
 #include "romfs_build.h"
+#include "dlc_install.h"
 #include "settings.h"
 #include "input_bind.h"
 int game_version_of_build(const uint8_t id[8]);  // runtime/loader.c: 100, 160, 182; 0 another one
@@ -439,6 +441,7 @@ static void *extract_thread(void *) {
         // unless the picked folder brought it built already for this app (its id: runtime/gamelib.c)
         if (gamelib_present(dest.c_str())) fprintf(stderr, "[launcher] game code from the picked folder\n");
         else if (!build_game_code(dest)) goto done;
+        android_call("buildServiceStop");  // the importer held a foreground service across archive extraction too
         goto check;
     }
 #endif
@@ -704,10 +707,34 @@ extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidAc
 
 extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeImportLooking(JNIEnv *, jclass) {
     g_searched = 0;
+    g_done = 0;
+    g_total = 0;
+    g_build_frac = -1;
     pthread_mutex_lock(&g_lock);
     g_busy = true;
     pthread_mutex_unlock(&g_lock);
     set_job("Looking for the game files...");
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeImportArchiveStage(JNIEnv *env, jclass, jstring stage) {
+    const char *s = env->GetStringUTFChars(stage, NULL);
+    g_done = 0;
+    g_total = 0;
+    set_job(s ? s : "Setting up the game files...");
+    if (s) env->ReleaseStringUTFChars(stage, s);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeImportLog(JNIEnv *env, jclass, jstring message) {
+    const char *text = env->GetStringUTFChars(message, NULL);
+    if (text) { fprintf(stderr, "[switch-import] %s\n", text); env->ReleaseStringUTFChars(message, text); }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeImportArchiveOutput(JNIEnv *env, jclass, jstring path) {
+    const char *p = env->GetStringUTFChars(path, NULL);
+    pthread_mutex_lock(&g_lock);
+    g_dest = p ? p : "";
+    pthread_mutex_unlock(&g_lock);
+    if (p) env->ReleaseStringUTFChars(path, p);
 }
 
 // The import of that version's files begins: its own extracted/ (runtime/paths.h), emptied of an earlier setup - its
@@ -793,6 +820,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidAc
     g_done = (unsigned long long)done;
 }
 
+extern "C" void switch_archive_progress(uint64_t done, uint64_t total) {
+    g_total = total;
+    g_done = done;
+}
+
 // The few romfs/ files the runtime opens by path rather than through romfs.bin: the movies (hle/movie.c). Only these
 // stay loose.
 static bool keep_loose(const char *rel) {
@@ -856,6 +888,24 @@ static std::string dlc_dir(void) {
     return rt_version_root(100, r, sizeof r) ? std::string(r) + "/dlc" : std::string();
 }
 static void dlc_progress(uint64_t done, uint64_t total) { g_dlc_frac = total ? (float)((double)done / (double)total) : 0; }
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeHasDlcImage(
+        JNIEnv *, jclass) {
+    return fs_aoc_image() ? JNI_TRUE : JNI_FALSE;
+}
+
+// Install an already-built DLC RomFS after validating it and preparing its loose files.
+extern "C" JNIEXPORT jstring JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeInstallDlcImage(
+        JNIEnv *env, jclass, jstring path) {
+    const char *p = env->GetStringUTFChars(path, NULL);
+    if (!p) return env->NewStringUTF("Could not read the DLC image path.");
+    std::string source(p);
+    env->ReleaseStringUTFChars(path, p);
+    char why[256] = "";
+    std::string dir = dlc_dir();
+    bool ok = dlc_install_image(source.c_str(), dir.c_str(), keep_loose, why, sizeof why);
+    return ok ? NULL : env->NewStringUTF(why[0] ? why : "Could not install the DLC image.");
+}
 extern "C" JNIEXPORT jstring JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeBuildDlc(
         JNIEnv *env, jobject act, jobjectArray paths, jlongArray sizes) {
     int n = env->GetArrayLength(paths);
@@ -881,9 +931,15 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_botwrecompandroid_BOTWRecompAndroi
     mkdir(romfs.c_str(), 0755);
     g_dlc_frac = 0;
     char why[256] = "";
-    bool ok = romfs_build_entries(entries.data(), n, romfs_jni_open, &j, (dir + "/aoc.bin").c_str(), romfs.c_str(),
+    std::string image = dir + "/aoc.bin", pending = dir + "/aoc.bin.part";
+    bool ok = romfs_build_entries(entries.data(), n, romfs_jni_open, &j, pending.c_str(), romfs.c_str(),
                                   keep_loose, dlc_progress, why, sizeof why);
     g_dlc_frac = -1;
+    if (ok && rename(pending.c_str(), image.c_str()) != 0) {
+        snprintf(why, sizeof why, "Could not finish installing the DLC image.");
+        ok = false;
+    }
+    if (!ok) remove(pending.c_str());
     if (ok) return NULL;
     fprintf(stderr, "[launcher] DLC image: %s\n", why);
     return env->NewStringUTF(why[0] ? why : "Could not build the DLC's data image. Check free storage and try again.");
@@ -1797,6 +1853,7 @@ static void prelaunch_tab(float sc) {
             pthread_mutex_unlock(&g_lock);
             android_call("pickDlcFolder");  // (then importDlc -> nativeBuildDlc -> nativeDlcDone)
         }
+        if (ImGui::Button(tr("Import DLC NSP/XCI"))) android_call("pickSwitchDlcArchive");
         if (have) {
             ImGui::SameLine();
             if (ImGui::Button(tr("Remove DLC"))) {
@@ -2357,6 +2414,21 @@ extern "C" void launcher_run(const char *root) {
 #ifdef __ANDROID__
                 if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
                     android_call(g_settings.files_in_place ? "pickGameFolderInPlace" : "pickGameFolder");
+                if (busy) opt_disable_next();
+                if (opt_action("Choose prod.keys", "", "The key file is copied only into BOTWRecompAndroid's private app storage.", true))
+                    android_call("pickProdKeys");
+                if (busy) opt_disable_next();
+                if (opt_action("Delete saved prod.keys", "", "Remove the saved key file from this app.", true))
+                    android_call("deleteProdKeys");
+                if (busy) opt_disable_next();
+                if (opt_action("Import NSP/XCI", "", "Select the base game and optionally its update together.", true))
+                    android_call("pickSwitchArchive");
+                if (busy) opt_disable_next();
+                if (opt_action("Import DLC NSP/XCI", "", "Install the Expansion Pass data from an NSP or XCI.", true))
+                    android_call("pickSwitchDlcArchive");
+                if (busy) opt_disable_next();
+                if (opt_action("Inspect NSP/XCI", "", "List PFS0/HFS0 entries without extracting them.", true))
+                    android_call("inspectSwitchContainer");
 #else
                 if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
                     SDL_ShowOpenFolderDialog(picked, NULL, win, NULL, false);

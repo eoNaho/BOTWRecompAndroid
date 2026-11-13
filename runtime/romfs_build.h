@@ -48,6 +48,7 @@ bool romfs_image_fd_ok(int fd, char *why, size_t why_size);
 bool romfs_image_files(int fd, void (*each)(void *ud, const char *path, uint64_t off, uint64_t size), void *ud,
                        char *why, size_t why_size);
 int romfs_check_image(int version, int fd, char *why, size_t why_size);
+bool romfs_check_dlc_image(int fd, char *why, size_t why_size);
 bool romfs_image_extract(int fd, const char *keep_dir, bool (*keep)(const char *rel), char *why, size_t why_size);
 
 // Bytes of file data under dir (the image is about this plus its tables).

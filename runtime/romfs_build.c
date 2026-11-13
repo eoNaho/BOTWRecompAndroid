@@ -309,7 +309,7 @@ static bool read_full(int fd, void *dst, uint64_t n, uint64_t off) {
 typedef struct {
     const uint8_t *dt, *ft;  // directory and file entry tables
     uint32_t dsize, fsize;
-    uint64_t data;  // where file data starts
+    uint64_t data, image_size;  // where file data starts, and the image's full length
     void (*each)(void *ud, const char *path, uint64_t off, uint64_t size);
     void *ud;
     long budget;  // (entries left to visit: a damaged table's loop ends)
@@ -318,6 +318,12 @@ typedef struct {
 static uint32_t get32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint64_t get64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
 
+static bool safe_component(const uint8_t *name, uint32_t len) {
+    if (!len || (len == 1 && name[0] == '.') || (len == 2 && name[0] == '.' && name[1] == '.')) return false;
+    for (uint32_t i = 0; i < len; i++) if (!name[i] || name[i] == '/' || name[i] == '\\') return false;
+    return true;
+}
+
 static bool walk_dir(Walk *w, uint32_t doff, char *path, size_t len, int depth) {
     if (depth > 64 || doff > w->dsize - 0x18) return false;
     const uint8_t *d = w->dt + doff;
@@ -325,17 +331,20 @@ static bool walk_dir(Walk *w, uint32_t doff, char *path, size_t len, int depth) 
         if (--w->budget < 0 || f > w->fsize - 0x20) return false;
         const uint8_t *e = w->ft + f;
         uint32_t nl = get32(e + 28);
-        if (nl > w->fsize - f - 0x20 || len + nl + 2 > 4096) return false;
+        if (nl > w->fsize - f - 0x20 || len + nl + 2 > 4096 || !safe_component(e + 0x20, nl)) return false;
         memcpy(path + len, e + 0x20, nl);
         path[len + nl] = 0;
-        w->each(w->ud, path, w->data + get64(e + 8), get64(e + 16));
+        uint64_t off = get64(e + 8), size = get64(e + 16);
+        if (w->data > w->image_size || off > w->image_size - w->data || size > w->image_size - w->data - off)
+            return false;
+        w->each(w->ud, path, w->data + off, size);
         f = get32(e + 4);
     }
     for (uint32_t c = get32(d + 8); c != EMPTY; ) {  // its folders
         if (--w->budget < 0 || c > w->dsize - 0x18) return false;
         const uint8_t *e = w->dt + c;
         uint32_t nl = get32(e + 20);
-        if (nl > w->dsize - c - 0x18 || len + nl + 2 > 4096) return false;
+        if (nl > w->dsize - c - 0x18 || len + nl + 2 > 4096 || !safe_component(e + 0x18, nl)) return false;
         memcpy(path + len, e + 0x18, nl);
         path[len + nl] = '/';
         if (!walk_dir(w, c, path, len + nl + 1, depth + 1)) return false;
@@ -369,7 +378,8 @@ bool romfs_image_fd_ok(int fd, char *why, size_t why_size) {
 bool romfs_image_files(int fd, void (*each)(void *ud, const char *path, uint64_t off, uint64_t size), void *ud,
                        char *why, size_t why_size) {
     uint64_t h[10];
-    if (!romfs_image_fd_ok(fd, why, why_size) || !read_full(fd, h, sizeof h, 0)) return false;
+    struct stat st;
+    if (!romfs_image_fd_ok(fd, why, why_size) || !read_full(fd, h, sizeof h, 0) || fstat(fd, &st) != 0) return false;
     if (h[4] < 0x18 || h[8] < 0x20 || h[4] > (256u << 20) || h[8] > (256u << 20)) {
         if (why) snprintf(why, why_size, "its tables are damaged");
         return false;
@@ -377,13 +387,29 @@ bool romfs_image_files(int fd, void (*each)(void *ud, const char *path, uint64_t
     uint8_t *dt = malloc(h[4]), *ft = malloc(h[8]);
     bool ok = dt && ft && read_full(fd, dt, h[4], h[3]) && read_full(fd, ft, h[8], h[7]);
     if (ok) {
-        Walk w = {dt, ft, (uint32_t)h[4], (uint32_t)h[8], h[9], each, ud, (long)(h[4] / 0x18 + h[8] / 0x20)};
+        Walk w = {dt, ft, (uint32_t)h[4], (uint32_t)h[8], h[9], (uint64_t)st.st_size, each, ud, (long)(h[4] / 0x18 + h[8] / 0x20)};
         char path[4096];
         ok = walk_dir(&w, 0, path, 0, 0);
     }
     if (!ok && why) snprintf(why, why_size, "its file tables can't be read");
     free(dt), free(ft);
     return ok;
+}
+
+typedef struct { bool version, pack; } DlcImageContents;
+static void dlc_image_file(void *ud, const char *path, uint64_t off, uint64_t size) {
+    (void)off; (void)size;
+    DlcImageContents *found = ud;
+    if (!strcmp(path, "System/AocVersion.txt")) found->version = true;
+    if (!strncmp(path, "Pack/", 5)) found->pack = true;
+}
+
+bool romfs_check_dlc_image(int fd, char *why, size_t why_size) {
+    DlcImageContents found = {0};
+    if (!romfs_image_files(fd, dlc_image_file, &found, why, why_size)) return false;
+    if (found.version && found.pack) return true;
+    if (why) snprintf(why, why_size, "The DLC image is missing System/AocVersion.txt or Pack/.");
+    return false;
 }
 
 // romfs_check_set for an image: its file list and System/Version.txt from inside it

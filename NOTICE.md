@@ -11,5 +11,9 @@ repository at that commit). The source files outside that folder stay MIT on the
 
 To build an APK without it: CMake `-DBOTW_LSFG=OFF` (the app then reports frame generation as "not in this build").
 
+The Android archive importer includes [hactool](third_party/hactool/LICENSE), copyright 2018 SciresM, under the ISC
+license, and its bundled [Mbed TLS](third_party/hactool/mbedtls/LICENSE) under Apache-2.0. Their notices and source
+are in `third_party/hactool`.
+
 `Lossless.dll` (Lossless Scaling for Windows, proprietary) is never in this repository or in any APK: the player supplies
 their own copy, and the app reads its shaders at run time.

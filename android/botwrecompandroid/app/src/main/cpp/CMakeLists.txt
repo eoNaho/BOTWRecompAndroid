@@ -7,6 +7,7 @@ project(botwrecompandroid C CXX ASM)
 set(R ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../..)   # the repository
 get_filename_component(R ${R} ABSOLUTE)
 set(DEPS ${R}/android/deps/out)                        # android/deps/build_deps.sh
+set(HACTOOL ${R}/third_party/hactool)
 if(NOT EXISTS ${DEPS}/lib/libSDL3.so)
     message(FATAL_ERROR "run android/deps/build_deps.sh first")
 endif()
@@ -18,6 +19,22 @@ include(${R}/android/gamelib_id.cmake)  # (GAMELIB_ID: the same as botwgame.so's
 message(STATUS "GAMELIB_ID ${GAMELIB_ID}")
 
 add_subdirectory(${R}/third_party/libadrenotools ${CMAKE_BINARY_DIR}/adrenotools)
+
+# hactool (ISC) and its bundled mbed TLS 2.6.1 dependency: the player's own archive and keys are processed on-device.
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+add_subdirectory(${HACTOOL}/mbedtls ${CMAKE_BINARY_DIR}/hactool-mbedtls EXCLUDE_FROM_ALL)
+
+set(HACTOOL_SRC
+    ${HACTOOL}/save.c ${HACTOOL}/sha.c ${HACTOOL}/aes.c ${HACTOOL}/extkeys.c ${HACTOOL}/rsa.c
+    ${HACTOOL}/npdm.c ${HACTOOL}/bktr.c ${HACTOOL}/kip.c ${HACTOOL}/packages.c ${HACTOOL}/pki.c
+    ${HACTOOL}/pfs0.c ${HACTOOL}/hfs0.c ${HACTOOL}/nca0_romfs.c ${HACTOOL}/romfs.c ${HACTOOL}/utils.c
+    ${HACTOOL}/nax0.c ${HACTOOL}/nso.c ${HACTOOL}/lz4.c ${HACTOOL}/nca.c ${HACTOOL}/xci.c
+    ${HACTOOL}/filepath.c ${HACTOOL}/ConvertUTF.c ${HACTOOL}/cJSON.c)
+# hactool is also a command-line tool: convert its fatal exits into errors at the JNI boundary.
+set_source_files_properties(${HACTOOL_SRC} PROPERTIES COMPILE_DEFINITIONS "exit=switch_hactool_exit")
 
 add_library(SDL3 SHARED IMPORTED)
 set_target_properties(SDL3 PROPERTIES IMPORTED_LOCATION ${DEPS}/lib/libSDL3.so)
@@ -52,7 +69,8 @@ set(IMGUI ${R}/third_party/imgui)
 set(IMGUI_SRC ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
     ${IMGUI}/backends/imgui_impl_sdl3.cpp ${IMGUI}/backends/imgui_impl_vulkan.cpp)
 
-add_library(main SHARED ${RT_SRC} ${R}/runtime/platform/android.c ${VK_SRC} ${UI_SRC} ${IMGUI_SRC}
+add_library(main SHARED ${RT_SRC} ${R}/runtime/platform/android.c ${VK_SRC} ${UI_SRC} ${IMGUI_SRC} ${HACTOOL_SRC}
+            ${R}/android/botwrecompandroid/app/src/main/cpp/switch_import_jni.c
             ${DEPS}/volk/volk.c ${R}/android/common/guest_window.c ${R}/runtime/native_gate.S)
 # the UI sources are plain C++ apart from __APPLE__ blocks (compiled as C++ on Android)
 set_source_files_properties(${UI_SRC} PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-xc++")
@@ -65,7 +83,8 @@ add_dependencies(main benchmark_commit)
 target_include_directories(main PRIVATE ${CMAKE_BINARY_DIR}/benchmark)
 
 target_include_directories(main PRIVATE ${R}/runtime ${R}/runtime/nvn ${IMGUI} ${IMGUI}/backends ${DEPS}/include
-                           ${DEPS}/volk ${BOTW_GEN_DIR} ${R}/third_party/smaa/Textures ${R}/android/common)
+                           ${DEPS}/volk ${BOTW_GEN_DIR} ${R}/third_party/smaa/Textures ${R}/android/common
+                           ${HACTOOL} ${HACTOOL}/mbedtls/include)
 target_compile_definitions(main PRIVATE
     VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_IMPL_VULKAN_USE_VOLK   # Vulkan from the loaded driver (volk)
     VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
@@ -78,6 +97,6 @@ endif()
 # game thread's time
 target_compile_options(main PRIVATE -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Wno-format  # (as on Linux: %llx for uint64_t)
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>)
-target_link_libraries(main PRIVATE SDL3 shaderc_shared adrenotools android log dl m)
+target_link_libraries(main PRIVATE SDL3 shaderc_shared adrenotools mbedtls mbedx509 mbedcrypto android log dl m)
 # (runtime/hle.h, ipc.h, main.c: tables in named sections found through __start_ / __stop_ symbols)
 target_link_options(main PRIVATE -Wl,-z,nostart-stop-gc)

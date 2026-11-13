@@ -66,8 +66,10 @@ Windows, Linux e macOS podem continuar sendo usados como ambientes de desenvolvi
 
 > [!NOTE]
 > **Nenhum arquivo do jogo ou DLC vem incluído.** Você precisa dos seus próprios arquivos do jogo, obtidos legalmente
-> e extraídos (`exefs` e `romfs`). O app não abre NSP/XCI nem usa `prod.keys`. Não serão dadas instruções de como
-> obter os arquivos.
+> e extraídos (`exefs` e `romfs`). Um importador experimental aceita o jogo base NSP/XCI e, opcionalmente, uma
+> atualização selecionada junto; outro importa os dados do Expansion Pass. O app usa o `prod.keys` escolhido pelo usuário,
+> guardado no armazenamento privado. Esses caminhos ainda precisam ser validados com arquivos reais do jogo. Não serão
+> dadas instruções de como obter os arquivos.
 
 ## Touch Controls Overhaul
 
@@ -110,6 +112,18 @@ Desde a **0.2.12-beta**, enquanto você joga no mundo, os controles de toque mos
 4. Em celulares com Adreno, um driver Mesa Turnip pode ter desempenho melhor que o driver do sistema. Selecione-o em
    **Configurações > Arquivos > Driver Vulkan**. Se o app informar que o driver Vulkan é antigo ao abrir, toque e
    segure o ícone do app e escolha **Escolher driver** antes de iniciar o jogo.
+
+### Importar NSP/XCI (experimental)
+
+Em **Arquivos do jogo**, toque em **Escolher prod.keys** e depois em **Importar NSP/XCI**. Selecione o jogo base e,
+para instalar uma atualização, selecione os arquivos do jogo base e do update juntos no seletor. O update precisa do
+jogo base correspondente. A importação exige espaço temporário para os arquivos selecionados e para a imagem resultante;
+o app confere o espaço antes de extrair. Tickets personalizados ainda não são aceitos.
+
+Para o Passe de Expansão, use **Importar DLC NSP/XCI** e escolha o pacote que contém os dados maiores de
+`01007EF00011F001`. Eles são usados pelas duas DLCs; o pacote `01007EF00011F002` contém apenas o desbloqueio e não
+pode ser importado sozinho. Use o jogo na versão 1.6.0 ou mais recente. **Apagar prod.keys salvo** remove a cópia das
+chaves armazenada pelo app.
 
 Atualizar da 0.2.x para a 0.4.0-beta não exige recompilar o código do jogo. Os shaders são compilados novamente uma
 vez, então os primeiros minutos podem ter travadinhas. Para relatar um problema, abra uma

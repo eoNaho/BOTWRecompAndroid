@@ -4,6 +4,14 @@ input/
 # the BOTW dump (exefs/ + romfs/ under Dump/<title id>/): never committed
 /Dump/
 /drivers/
+prod.keys
+title.keys
+*.nsp
+*.xci
+*.nca
+*.tik
+*.nsz
+*.xcz
 extracted/
 generated/
 generated-*/
@@ -21,3 +29,7 @@ tools/venv/
 venv/
 __pycache__/
 .DS_Store
+third_party/
+!third_party/
+third_party/*
+!third_party/hactool/

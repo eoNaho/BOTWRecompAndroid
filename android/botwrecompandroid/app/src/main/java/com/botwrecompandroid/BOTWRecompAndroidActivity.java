@@ -37,6 +37,9 @@ import android.os.PowerManager;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
+import android.view.Gravity;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
 import org.libsdl.app.SDLActivity;
 
@@ -74,8 +77,27 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static native void nativeImportLooking();  // (the picked folder is being searched: busy, and said so)
     private static native String nativeImportBegin(String name, int version);
     private static native void nativeImportProgress(long done, long total);
+    private static native void nativeImportArchiveStage(String stage);
+    private static native void nativeImportLog(String message);
+    private static native void nativeImportArchiveOutput(String path);
     private static native void nativeImportDone(int result);
     private static native void nativeImportDetail(String what);  // (a failure's cause, shown under it)
+    private static String ncaHeaderFingerprint(File header) throws IOException {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            try (java.io.InputStream input = new java.io.FileInputStream(header)) {
+                byte[] buffer = new byte[4096];
+                int n;
+                while ((n = input.read(buffer)) != -1) digest.update(buffer, 0, n);
+            }
+            return android.util.Base64.encodeToString(digest.digest(), android.util.Base64.NO_WRAP);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IOException("SHA-256 is unavailable.", e);
+        }
+    }
+
+    private static native String nativeExtractNca(String ncaPath, String keysPath, String ticketDir, String exefsDir, String romfsPath, int mode, String basePath, boolean image);
+    private static native int nativeNcaKind(String ncaPath, String keysPath);
     private native String nativeBuildRomfs(String[] paths, long[] sizes);
     private static native boolean nativeCheckRomfs(int version, String[] paths, String versionTxt);
     private static native boolean nativeCheckRomfsImage(int version, int fd);  // (fd: closed by the native side)
@@ -88,8 +110,11 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static native void nativeSaveDone(int result, String detail);
     private static final int REQ_GAME = 0x4c41, REQ_DRIVER = 0x4c42, REQ_MOD = 0x4c46, REQ_LOG = 0x4c47,
             REQ_DRIVER_RECOVER = 0x4c48, REQ_SAVE_IN = 0x4c49, REQ_SAVE_OUT = 0x4c4a, REQ_SAVE_IN_TREE = 0x4c4c,
-            REQ_DLC = 0x4c4d;
+            REQ_DLC = 0x4c4d, REQ_CONTAINER_INSPECT = 0x4c4e, REQ_PROD_KEYS = 0x4c4f,
+            REQ_CONTAINER_IMPORT = 0x4c50, REQ_CONTAINER_DLC = 0x4c51;
     private native String nativeBuildDlc(String[] paths, long[] sizes);
+    private static native String nativeInstallDlcImage(String path);
+    private static native boolean nativeHasDlcImage();
     private static native void nativeDlcDone(int result, String detail);
     private static BOTWRecompAndroidActivity self;
     private WatchMapServer watchMap;
@@ -265,6 +290,68 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
         });
     }
 
+    // First on-device import milestone: inspect a user's NSP/XCI directory through SAF, without staging the whole file.
+    public static void inspectSwitchContainer() {
+        self.runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            try {
+                self.startActivityForResult(i, REQ_CONTAINER_INSPECT);
+            } catch (Exception e) {
+                Log.e(TAG, "container picker", e);
+                self.showContainerInspection("Could not open the file picker: " + e.getMessage());
+            }
+        });
+    }
+
+    public static void pickProdKeys() {
+        self.runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            try {
+                self.startActivityForResult(i, REQ_PROD_KEYS);
+            } catch (Exception e) {
+                Log.e(TAG, "prod.keys picker", e);
+                self.showSwitchImportResult("Could not open the file picker: " + e.getMessage());
+            }
+        });
+    }
+
+    public static void deleteProdKeys() {
+        self.runOnUiThread(() -> {
+            File keys = self.prodKeysFile();
+            if (!keys.exists() || keys.delete()) self.showSwitchImportResult("Saved prod.keys removed.");
+            else self.showSwitchImportResult("Could not remove the saved prod.keys.");
+        });
+    }
+
+    public static void pickSwitchArchive() {
+        self.runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try {
+                self.startActivityForResult(i, REQ_CONTAINER_IMPORT);
+            } catch (Exception e) {
+                Log.e(TAG, "NSP/XCI picker", e);
+                self.showSwitchImportResult("Could not open the file picker: " + e.getMessage());
+            }
+        });
+    }
+
+    public static void pickSwitchDlcArchive() {
+        self.runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            try { self.startActivityForResult(i, REQ_CONTAINER_DLC); }
+            catch (Exception e) { self.showSwitchImportResult("Could not open the file picker: " + e.getMessage()); }
+        });
+    }
+
     // Game files used in place (Game Files > Game files: Use them in place): the native side reads the picked romfs/ by
     // its path (runtime/services/fs.c, romfs.link), which Android allows only with the access to all files. Without it,
     // the system's page for it opens and the setup waits for the folder to be chosen again.
@@ -362,6 +449,31 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int req, int result, Intent data) {
+        if (req == REQ_CONTAINER_DLC) {
+            Uri file = result == Activity.RESULT_OK && data != null ? data.getData() : null;
+            if (file != null) new Thread(() -> importSwitchDlcArchive(file), "switch-dlc-import").start();
+            return;
+        }
+        if (req == REQ_PROD_KEYS) {
+            Uri file = result == Activity.RESULT_OK && data != null ? data.getData() : null;
+            if (file != null) new Thread(() -> saveProdKeys(file), "prod-keys").start();
+            return;
+        }
+        if (req == REQ_CONTAINER_IMPORT) {
+            List<Uri> files = new ArrayList<>();
+            if (result == Activity.RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    for (int i = 0; i < data.getClipData().getItemCount(); i++) files.add(data.getClipData().getItemAt(i).getUri());
+                } else if (data.getData() != null) files.add(data.getData());
+            }
+            if (!files.isEmpty()) new Thread(() -> importSwitchArchive(files), "switch-import").start();
+            return;
+        }
+        if (req == REQ_CONTAINER_INSPECT) {
+            Uri file = result == Activity.RESULT_OK && data != null ? data.getData() : null;
+            if (file != null) new Thread(() -> inspectSwitchContainer(file), "container-inspector").start();
+            return;
+        }
         if (req == REQ_GAME) {
             Uri tree = result == Activity.RESULT_OK && data != null ? data.getData() : null;
             if (tree == null) nativeImportDone(1);
@@ -421,8 +533,295 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
         super.onActivityResult(req, result, data);
     }
 
-    // ---- the log file (Settings > Prelaunch > Driver compatibility, runtime/platform/android.c; LASRecompAndroid's)
-    // goes to a folder the player picks (Android keeps Android/data/ out of reach of file managers): botwrecomp-log.txt,
+    private void inspectSwitchContainer(Uri uri) {
+        String result;
+        try (android.os.ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "r")) {
+            if (fd == null) throw new IOException("Android could not open the selected file.");
+            result = SwitchContainerInspector.inspect(fd);
+        } catch (Exception e) {
+            Log.w(TAG, "container inspection failed", e);
+            result = "Inspection failed\n\n" + (e.getMessage() == null ? e.toString() : e.getMessage());
+        }
+        final String report = result;
+        runOnUiThread(() -> showContainerInspection(report));
+    }
+
+    private void showContainerInspection(String report) {
+        TextView text = new TextView(this);
+        text.setText(report);
+        text.setTextIsSelectable(true);
+        text.setTextSize(13);
+        text.setGravity(Gravity.START);
+        text.setPadding(24, 16, 24, 16);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(text);
+        new AlertDialog.Builder(this)
+                .setTitle("NSP/XCI container inspector")
+                .setMessage("Lists container entries only. NCA decryption and extraction are not implemented yet.")
+                .setView(scroll)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private File switchImportDir() { return new File(getFilesDir(), "switch-import"); }
+    private File prodKeysFile() { return new File(switchImportDir(), "prod.keys"); }
+
+    private void showSwitchImportResult(String message) {
+        new AlertDialog.Builder(this)
+                .setTitle("NSP/XCI import")
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void saveProdKeys(Uri uri) {
+        File dir = switchImportDir();
+        File staged = new File(dir, "prod.keys.importing");
+        try {
+            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Could not create private key storage.");
+            long bytes = 0;
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 OutputStream out = new FileOutputStream(staged)) {
+                if (in == null) throw new IOException("Android could not open prod.keys.");
+                byte[] buf = new byte[1 << 16];
+                for (int n; (n = in.read(buf)) > 0; ) {
+                    bytes += n;
+                    if (bytes > 4 * 1024 * 1024) throw new IOException("prod.keys is unexpectedly large.");
+                    out.write(buf, 0, n);
+                }
+            }
+            String keys = new String(java.nio.file.Files.readAllBytes(staged.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            if (!keys.matches("(?s).*(^|\\n)\\s*header_key\\s*[,=]\\s*[0-9a-fA-F]{64}\\s*(?:\\r?\\n|$).*"))
+                throw new IOException("prod.keys is missing a valid 64-digit header_key.");
+            File dest = prodKeysFile();
+            Os.rename(staged.getAbsolutePath(), dest.getAbsolutePath());
+            runOnUiThread(() -> showSwitchImportResult("prod.keys saved in the app's private storage."));
+        } catch (Exception e) {
+            staged.delete();
+            Log.e(TAG, "save prod.keys", e);
+            String why = e.getMessage() == null ? e.toString() : e.getMessage();
+            runOnUiThread(() -> showSwitchImportResult("Could not save prod.keys.\n\n" + why));
+        }
+    }
+
+    // SDL synchronizes on the Activity when its surface changes. Keep lengthy imports off that monitor.
+    private static final Object IMPORT_LOCK = new Object();
+
+    private void importSwitchArchive(List<Uri> uris) {
+        synchronized (IMPORT_LOCK) { importSwitchArchiveLocked(uris); }
+    }
+
+    private void importSwitchArchiveLocked(List<Uri> uris) {
+        File root = getExternalFilesDir(null);
+        File work = root == null ? null : new File(root, "switch-import-work");
+        boolean nativeStarted = false, completed = false;
+        try {
+            File keys = prodKeysFile();
+            if (!keys.isFile()) throw new IOException("Choose your prod.keys first. It will be kept in the app's private storage.");
+            if (work == null) throw new IOException("The app's game-data storage is unavailable.");
+            nativeImportLog("Game import started: " + uris.size() + " archive(s) selected.");
+            nativeImportLooking();
+            nativeStarted = true;
+            BuildService.start(this);
+            BuildService.progress(this, 0);
+            deleteTree(work);
+            File ncasDir = new File(work, "nca");
+            File candidate = new File(work, "candidate");
+            File ready = new File(work, "ready");
+            if (!work.mkdirs()) throw new IOException("Could not create temporary import storage.");
+
+            File baseNca = new File(work, "base.nca"), updateNca = new File(work, "update.nca");
+            final int[] identified = {-1};
+            nativeImportArchiveStage("Reading the selected game archives...");
+            int[] counts = new int[4];
+            java.util.Set<String> seenHeaders = new java.util.HashSet<>();
+            for (Uri uri : uris) {
+                try (android.os.ParcelFileDescriptor input = getContentResolver().openFileDescriptor(uri, "r")) {
+                    if (input == null) throw new IOException("Android could not open a selected NSP/XCI.");
+                    SwitchContainerInspector.processNcas(input, ncasDir, header -> {
+                        int kind = nativeNcaKind(header.getAbsolutePath(), keys.getAbsolutePath());
+                        if (kind == -2) throw new IOException("Could not read an NCA header; check header_key in prod.keys and the selected archive.");
+                        if (kind >= 0 && kind < counts.length && seenHeaders.add(ncaHeaderFingerprint(header))) counts[kind]++;
+                        return false;
+                    }, nca -> false, null);
+                }
+            }
+            nativeImportLog("Archive contents: " + counts[0] + " base program(s), " + counts[1] +
+                    " update program(s), " + counts[2] + " DLC data pack(s), " + counts[3] + " DLC unlock(s).");
+            if (counts[0] == 0) throw new IOException("The base game NSP/XCI is required, including when installing an update.");
+            if (counts[0] > 1 || counts[1] > 1)
+                throw new IOException("More than one base or update program was found. Select one base and one update version.");
+            if (uris.size() > 1 && counts[1] == 0)
+                throw new IOException("No BOTW update program was found in the selected files. The previous game was kept.");
+            seenHeaders.clear();
+            for (Uri uri : uris) {
+                try (android.os.ParcelFileDescriptor input = getContentResolver().openFileDescriptor(uri, "r")) {
+                    if (input == null) throw new IOException("Android could not open a selected NSP/XCI.");
+                    SwitchContainerInspector.processNcas(input, ncasDir, header -> {
+                        int kind = nativeNcaKind(header.getAbsolutePath(), keys.getAbsolutePath());
+                        if (kind == -2) throw new IOException("Could not read an NCA header; check header_key in prod.keys and the selected archive.");
+                        identified[0] = kind;
+                        return (kind == 0 || kind == 1) && seenHeaders.add(ncaHeaderFingerprint(header));
+                    }, nca -> {
+                        int kind = identified[0];
+                        File dest = kind == 0 ? baseNca : kind == 1 ? updateNca : null;
+                        if (dest != null) {
+                            if (dest.exists()) throw new IOException("More than one " + (kind == 0 ? "base" : "update") + " program was found; select one version.");
+                            if (!nca.renameTo(dest)) throw new IOException("Could not stage the game NCA.");
+                        }
+                        return false;
+                    }, BOTWRecompAndroidActivity::nativeImportProgress);
+                }
+            }
+            if (!baseNca.isFile()) throw new IOException("The base game NSP/XCI is required, including when installing an update.");
+            if (uris.size() > 1 && !updateNca.isFile())
+                throw new IOException("No BOTW update program was found in the selected files. The previous game was kept.");
+            nativeImportLog("Game archive scan: base found, update " + (updateNca.isFile() ? "found." : "not found; importing base only."));
+            long inputBytes = baseNca.length() + (updateNca.isFile() ? updateNca.length() : 0);
+            long free = new android.os.StatFs(root.getPath()).getAvailableBytes();
+            long required = inputBytes > Long.MAX_VALUE - (512L << 20) ? Long.MAX_VALUE : inputBytes + (512L << 20);
+            if (free < required) throw new IOException("Not enough free space for extraction and the game image. Estimated additional space: " +
+                    android.text.format.Formatter.formatFileSize(this, required) + "; available: " +
+                    android.text.format.Formatter.formatFileSize(this, free));
+            File exefs = new File(candidate, "exefs"), image = new File(candidate, "romfs.bin");
+            if (!exefs.mkdirs()) throw new IOException("Could not create temporary extraction folders.");
+            nativeImportArchiveStage("Extracting game data; this can take several minutes...");
+            String info = nativeExtractNca((updateNca.isFile() ? updateNca : baseNca).getAbsolutePath(), keys.getAbsolutePath(),
+                    ncasDir.getAbsolutePath(), exefs.getAbsolutePath(), image.getAbsolutePath(), updateNca.isFile() ? 2 : 0,
+                    updateNca.isFile() ? baseNca.getAbsolutePath() : null, true);
+            if (info == null || !info.startsWith("OK|")) {
+                if (info != null && info.startsWith("KEY|")) throw new IOException("prod.keys is missing " + info.substring(4) + ".");
+                if (info != null && info.startsWith("RIGHTS|")) throw new IOException("The matching title ticket is missing.");
+                throw new IOException(info != null && info.startsWith("ERROR|") ? info.substring(6) : "Could not extract the selected game.");
+            }
+            File main = new File(exefs, "main"), npdm = new File(exefs, "main.npdm");
+            if (!main.isFile() || !npdm.isFile() || !image.isFile())
+                throw new IOException("The selected game and update did not produce a complete ExeFS and RomFS.");
+            byte[] head = new byte[0x48];
+            try (InputStream in = new FileInputStream(main)) {
+                int got = 0;
+                while (got < head.length) { int n = in.read(head, got, head.length - got); if (n <= 0) break; got += n; }
+                if (got != head.length) throw new IOException("The extracted game executable is incomplete.");
+            }
+            int selectedVersion = nativeGameVersion(head);
+            if (selectedVersion == 0) throw new IOException("The extracted game version is not supported.");
+            nativeImportLog("Extracted game version: " + selectedVersion + ".");
+            if (updateNca.isFile() && selectedVersion == 100)
+                throw new IOException("The selected update produced the 1.0.0 executable. The previous game was kept.");
+            int imageFd = android.os.ParcelFileDescriptor.open(image, android.os.ParcelFileDescriptor.MODE_READ_ONLY).detachFd();
+            if (!nativeCheckRomfsImage(selectedVersion, imageFd))
+                throw new IOException("The extracted RomFS does not match the game executable, or is incomplete.");
+            if (!ready.mkdirs() || !exefs.renameTo(new File(ready, "exefs")) || !image.renameTo(new File(ready, "romfs.bin")))
+                throw new IOException("Could not stage the extracted game files.");
+            deleteTree(ncasDir);  // one NCA at a time was staged and deleted while scanning the archive
+            File readyExefs = new File(ready, "exefs"), readyImage = new File(ready, "romfs.bin");
+            nativeImportArchiveOutput(ready.getAbsolutePath());
+            int moviesFd = android.os.ParcelFileDescriptor.open(readyImage, android.os.ParcelFileDescriptor.MODE_READ_ONLY).detachFd();
+            String failed = nativeImageLoose(moviesFd);
+            if (failed != null) throw new IOException(failed);
+            // Keep an earlier installation until the new game image has been built successfully.
+            File dest = new File(nativeImportBegin("Imported game archive", selectedVersion));
+            if (!readyExefs.renameTo(new File(dest, "exefs")) ||
+                    !readyImage.renameTo(new File(dest, "romfs.bin")) ||
+                    !new File(ready, "romfs").renameTo(new File(dest, "romfs")))
+                throw new IOException("Could not move the finished game data into its installation folder.");
+            nativeImportLog("Game data installed for version " + selectedVersion + "; starting setup.");
+            BuildService.progress(this, 100);
+            nativeImportDone(0);  // the existing setup now builds/loads the game code as usual
+            completed = true;
+            return;
+        } catch (Exception e) {
+            Log.e(TAG, "NSP/XCI import", e);
+            String detail = e.getMessage() == null ? e.toString() : e.getMessage();
+            nativeImportLog("Game archive import failed: " + detail);
+            if (nativeStarted) {
+                nativeImportDetail(detail);
+                nativeImportDone(5);
+            } else {
+                runOnUiThread(() -> showSwitchImportResult(detail));
+            }
+        } finally {
+            romfsPaths.clear();
+            if (work != null) deleteTree(work);
+            if (nativeStarted && !completed) BuildService.stop(this);
+        }
+    }
+
+    private void importSwitchDlcArchive(Uri uri) {
+        synchronized (IMPORT_LOCK) { importSwitchDlcArchiveLocked(uri); }
+    }
+
+    private void importSwitchDlcArchiveLocked(Uri uri) {
+        File root = getExternalFilesDir(null);
+        File work = root == null ? null : new File(root, "switch-dlc-import-work");
+        boolean nativeStarted = false;
+        try {
+            File keys = prodKeysFile();
+            if (!keys.isFile()) throw new IOException("Choose prod.keys first.");
+            if (work == null) throw new IOException("The app's game-data storage is unavailable.");
+            nativeImportLog("DLC archive import started.");
+            nativeImportLooking();
+            nativeStarted = true;
+            BuildService.start(this);
+            nativeImportArchiveStage("Reading the selected game archives...");
+            deleteTree(work);
+            File ncas = new File(work, "nca"), exefs = new File(work, "exefs"), image = new File(work, "aoc.bin.part");
+            if (!exefs.mkdirs()) throw new IOException("Could not create temporary DLC storage.");
+            final String[] error = {"The archive does not contain the BOTW DLC pack 01007EF00011F001."};
+            final boolean[] found = {false};
+            final boolean[] unlockFound = {false};
+            try (android.os.ParcelFileDescriptor input = getContentResolver().openFileDescriptor(uri, "r")) {
+                if (input == null) throw new IOException("Android could not open the selected archive.");
+                SwitchContainerInspector.processNcas(input, ncas, header -> {
+                    int kind = nativeNcaKind(header.getAbsolutePath(), keys.getAbsolutePath());
+                    if (kind == -2) throw new IOException("Could not read an NCA header; check header_key in prod.keys and the selected archive.");
+                    if (kind == 3) {
+                        unlockFound[0] = true;
+                        error[0] = "This archive contains the F002 unlock. First install the larger DLC pack (F001).";
+                    }
+                    return kind == 2;
+                }, nca -> {
+                    long free = new android.os.StatFs(root.getPath()).getAvailableBytes();
+                    if (nca.length() > free) throw new IOException("Not enough free space for the DLC image.");
+                    nativeImportArchiveStage("Extracting game data; this can take several minutes...");
+                    String info = nativeExtractNca(nca.getAbsolutePath(), keys.getAbsolutePath(), ncas.getAbsolutePath(),
+                            exefs.getAbsolutePath(), image.getAbsolutePath(), 1, null, true);
+                    if (info != null && info.startsWith("KEY|")) error[0] = "prod.keys is missing " + info.substring(4) + ".";
+                    else if (info != null && info.startsWith("RIGHTS|")) error[0] = "The matching DLC ticket is missing.";
+                    else if (info != null && info.startsWith("ERROR|")) error[0] = info.substring(6);
+                    if (info != null && info.startsWith("OK|")) {
+                        if (!image.isFile()) throw new IOException("The DLC image was not written.");
+                        found[0] = true;
+                        return true;
+                    }
+                    return false;
+                }, BOTWRecompAndroidActivity::nativeImportProgress);
+            }
+            if (!found[0] && unlockFound[0] && nativeHasDlcImage()) {
+                nativeImportLog("DLC F002 selected; F001 image is already installed and both add-ons are exposed by the runtime.");
+                nativeDlcDone(DLC_INSTALLED, "");
+                runOnUiThread(() -> showSwitchImportResult("DLC F001 is already installed. The app makes both DLCs available; the F002 file does not need a separate installation."));
+                return;
+            }
+            if (!found[0]) throw new IOException(error[0]);
+            nativeImportLog("DLC F001 data NCA extracted; validating image.");
+            String failed = nativeInstallDlcImage(image.getAbsolutePath());
+            if (failed != null) throw new IOException(failed);
+            nativeImportLog("DLC image installed.");
+            nativeDlcDone(DLC_INSTALLED, "");
+            runOnUiThread(() -> showSwitchImportResult("DLC installed. Use an updated game version (1.6.0 or newer) to access both DLCs."));
+        } catch (Exception e) {
+            Log.e(TAG, "DLC archive import", e);
+            String why = e.getMessage() == null ? e.toString() : e.getMessage();
+            nativeImportLog("DLC archive import failed: " + why);
+            nativeDlcDone(DLC_FAILED, why);
+            runOnUiThread(() -> showSwitchImportResult(why));
+        } finally {
+            if (work != null) deleteTree(work);
+            if (nativeStarted) { nativeImportDone(1); BuildService.stop(this); }
+        }
+    }
+
     // the run before's kept as botwrecomp-log-previous.txt, both openable on the phone and sendable with a bug report
     private static final String LOG_NAME = "botwrecomp-log.txt", LOG_PREVIOUS = "botwrecomp-log-previous.txt";
 
@@ -783,6 +1182,10 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     }
 
     private void importDlc(Uri tree) {
+        synchronized (IMPORT_LOCK) { importDlcLocked(tree); }
+    }
+
+    private void importDlcLocked(Uri tree) {
         try {
             dlcBalladOnly = false;
             Doc d = findDlc(tree, treeRoot(tree), 0);
@@ -997,6 +1400,10 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     }
 
     private void importGame(Uri tree) {
+        synchronized (IMPORT_LOCK) { importGameLocked(tree); }
+    }
+
+    private void importGameLocked(Uri tree) {
         int result;
         nativeImportLooking();
         try {
