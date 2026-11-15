@@ -22,6 +22,8 @@
 #else
 #include "imgui_impl_vulkan.h"
 extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.cpp
+extern "C" bool vk_low_ram(void);                // runtime/nvn/vulkan/exec.c: RAM saving as the app started
+extern "C" bool vk_low_ram_auto(long *total_mb); // (what Automatic picks on this device)
 #endif
 
 extern "C" {
@@ -33,6 +35,7 @@ void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
 #include "../paths.h"
 int vk_fg_status(const char **why);  // (vulkan/lsfg/lsfg_present.c: frame generation)
+bool framepace_thermal_capped(void);  // hle/framepace.c: the thermal cap holds 60 / 45 fps at 30 now
 const char *vk_fg_dll_path(void);
 }
 
@@ -612,6 +615,15 @@ static void tab_display(void) {
                                "30. 20 fps: always 20, for slower devices. 30 fps: always 30 - where a frame takes longer, "
                                "the game runs slightly slower instead of dropping to 20."))
             g_settings.fps_mode = fr_mode[fi];
+        if (sixty && (g_settings.fps_mode == 2 || g_settings.fps_mode == 4)) {  // (hle/framepace.c fps_mode_now)
+            opt_toggle("30 fps when the phone overheats", &g_settings.thermal_cap, true,
+                       framepace_thermal_capped()
+                           ? "On now: Android says the phone is too hot, so the game runs at 30 fps until it has cooled for 30 "
+                             "seconds, then at the chosen rate again."
+                           : "While Android says the phone is too hot (its thermal status, or the heat it expects in the next "
+                             "seconds), 30 fps instead of a frame rate that jumps as the clocks drop; the chosen one again "
+                             "once it has cooled for 30 seconds.");
+        }
         if (sixty)
             opt_toggle("Cutscenes at 60 fps (experimental)", &g_settings.event_fps_unlock, false,
                        "In-game cutscenes and talks run at the chosen frame rate instead of 30. Some of them count frames "
@@ -629,7 +641,10 @@ static void tab_display(void) {
                  "GPU works more. Needs your own Lossless.dll from Lossless Scaling for Windows (not included): put it "
                  "in Download/, LSFG/, Documents/Emulation/bios/ or the app's files."),
                  tr("Lossless.dll"), dll ? dll : tr("not found"), tr("State"),
-                 st == 1 ? tr("generating") : st == 0 ? tr("off") : st == 2 ? tr("on, waiting for a steady frame rate") : why);
+                 st == 1 ? tr("generating") : st == 0 ? tr("off") : st == 2 ? tr("on, waiting for a steady frame rate")
+                 : st == 3 ? tr("on, but none fit: the screen refreshes too few times between the game's frames - a higher "
+                                "refresh rate in the phone's display (or game) settings, or a lower Frame rate here, makes room")
+                 : why);
         opt_toggle("Frame generation (LSFG)", &g_settings.lsfg, false, d);
         if (g_settings.lsfg) {
             opt_indent(1);
@@ -726,8 +741,11 @@ static void tab_display(void) {
                                    "(Internal resolution) follows it.\n\nThe final image is %.0f x %.0f."),
                  1920.0 * ox, 1080.0 * oy);
         if (on > 0 && on < (int)sizeof od)
-            snprintf(od + on, sizeof od - on, "\n\n%s", tr("Auto: 1080p on screens with more lines than that, where it costs the "
-                                                           "GPU the most; the screen's own on the others."));
+            snprintf(od + on, sizeof od - on, "\n\n%s", vk_low_ram()
+                         ? tr("Auto: 720p at most, with RAM saving on - on these devices the GPU is the limit, and the "
+                              "last passes at more lines cost it frames.")
+                         : tr("Auto: 1080p on screens with more lines than that, where it costs the GPU the most; the "
+                              "screen's own on the others."));
 #ifdef __ANDROID__
         enum { OUT_DEFAULT = 0 };  // (Auto: settings.c)
 #else
@@ -752,6 +770,29 @@ static void tab_display(void) {
                "Translates the game's shaders with 32-bit address math, the path used for drivers without 64-bit "
                "integers (Adreno 6xx / 7xx and Mali stock drivers). Try it if lighting, grass or text are missing or wrong "
                "on your GPU. Applies to shaders translated from now on: restart the app for all of them.");
+    {   // RAM saving (vulkan/exec.c vk_low_ram): read once as the app starts
+        void launcher_restart_app(void);  // (ui/launcher.mm)
+        static const char *ram[] = {"Automatic", "On", "Off"};  // display order -> low_ram -1 / 1 / 0
+        int ri = g_settings.low_ram < 0 ? 0 : g_settings.low_ram ? 1 : 2;
+        bool autolow = vk_low_ram_auto(NULL);
+        if (opt_choice("RAM saving", &ri, ram, 3, 0,
+                       autolow ? "For devices with 4 GB of RAM or less, where Android closes the game when memory runs out: "
+                                 "smaller GPU buffers, textures' copies given back once on the GPU, compressed textures at "
+                                 "half size, and the drawing thread on a fast core. Uses less memory and is faster on such "
+                                 "devices; textures can look a little softer. Automatic: on for this device. Applies when "
+                                 "BOTWRecompAndroid restarts."
+                               : "For devices with 4 GB of RAM or less, where Android closes the game when memory runs out: "
+                                 "smaller GPU buffers, textures' copies given back once on the GPU, compressed textures at "
+                                 "half size, and the drawing thread on a fast core. Uses less memory and is faster on such "
+                                 "devices; textures can look a little softer. Automatic: off for this device (more than 4 GB). "
+                                 "Applies when BOTWRecompAndroid restarts."))
+            g_settings.low_ram = ri == 0 ? -1 : ri == 1 ? 1 : 0;
+        bool want = g_settings.low_ram < 0 ? autolow : g_settings.low_ram != 0;
+        if (want != vk_low_ram() && !getenv("LARECOMP_LOW_RAM") &&
+            opt_button("Restart to apply RAM saving", "Closes BOTWRecompAndroid and opens it again with the new setting. "
+                                                      "Progress since the game's last save is lost."))
+            launcher_restart_app();
+    }
 #endif
     opt_end();
 }
@@ -840,6 +881,20 @@ static void tab_about(void) {
     if (toggle("Phone motion like the Switch's screen", &g_settings.motion_flat)) settings_save();  // (hle/motion.c, #211 #247)
     hint("Off: the phone moves the aim as a controller would. On: as the Switch's own screen in handheld mode - try it if "
          "tilting the phone turns the aim, and turning it tilts.");
+#ifdef __ANDROID__
+    {   // the game's vibration (hle/input.c input_rumble_apply): here, not in the bindings below - those give way to the
+        // touch layout while no controller is connected, and the phone's motor is for exactly then
+        static const char *const vib_names[] = {"Off", "25%", "50%", "75%", "100%"};
+        int vi = (g_settings.vibration + 12) / 25;
+        if (vi < 0) vi = 0;
+        if (vi > 4) vi = 4;
+        if (choice("Vibration", &vi, vib_names, 5)) { g_settings.vibration = vi * 25; settings_save(); }
+        hint("The game's rumble on a controller's motors, when it has them. Off: none.");
+        if (toggle("Phone's motor when the controller has none", &g_settings.vibration_phone)) settings_save();
+        hint("Some controllers don't show their motors to Android, and handhelds' built-in controls vibrate through the "
+             "device's motor: this plays the rumble there instead (touch play too).");
+    }
+#endif
     ImGui::Spacing();
     controls_bindings_draw(ImGui::GetFontSize() / 34);
     ImGui::Spacing();

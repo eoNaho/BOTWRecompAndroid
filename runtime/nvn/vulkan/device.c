@@ -1161,7 +1161,21 @@ double vk_display_hz(void) {
 static void android_frame_rate(struct ANativeWindow *aw) {
     static struct ANativeWindow *asked_aw;
     static float asked = -1;
-    float want = g_settings.fps_mode == 4 && vk_between_fps() != 30 ? (float)vk_between_fps() : 0.0f;
+    float want = fps_mode_now() == 4 && vk_between_fps() != 30 ? (float)vk_between_fps() : 0.0f;
+    bool fg = false;
+    {   // Frame generation on: room on the screen for the frames it makes - the chosen frame rate times its multiplier
+        // (60 fps x 2: 120 Hz). Android leaves a game at 60 Hz unless asked, and then a 40-50 fps game left no refresh
+        // between its frames, nothing was generated (ROG Phone 8, 165 Hz screen; lsfg_present.c's refresh cap). The
+        // system picks the nearest mode the screen has.
+        extern int vk_fg_status(const char **why);
+        int st = vk_fg_status(NULL);  // (1 generating, 2 waiting, 3 no room; 0 off, -1 unavailable)
+        if (st > 0) {
+            int m = fps_mode_now();
+            int base = m == 1 ? 30 : m == 3 ? 20 : m == 4 ? vk_between_fps() : 60;
+            int mult = g_settings.lsfg_mult < 2 ? 2 : g_settings.lsfg_mult > 4 ? 4 : g_settings.lsfg_mult;
+            want = (float)(base * mult), fg = true;
+        }
+    }
     if (aw == asked_aw && want == asked) return;
     // (libnativewindow's, looked up, not linked. Android 12+: with the change strategy ALWAYS - the plain call changes
     // the refresh only when it's seamless, and 120 -> 90 Hz isn't on the POCO F7 Ultra: it stayed at 120)
@@ -1174,7 +1188,8 @@ static void android_frame_rate(struct ANativeWindow *aw) {
         set_rate = lib ? (int (*)(struct ANativeWindow *, float, int8_t))dlsym(lib, "ANativeWindow_setFrameRate") : NULL;
         set_rate2 = lib ? (int (*)(struct ANativeWindow *, float, int8_t, int8_t))dlsym(lib, "ANativeWindow_setFrameRateWithChangeStrategy") : NULL;
     }
-    int8_t compat = want > 0 ? ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE : ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT;
+    int8_t compat = want > 0 && !fg ? ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE  // (generated: at least that rate)
+                                    : ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT;
     int r = set_rate2 ? set_rate2(aw, want, compat, 1 /* ANATIVEWINDOW_CHANGE_FRAME_RATE_ALWAYS */)
           : set_rate ? set_rate(aw, want, compat) : -1;
     if (want != asked) LOG("[vk] the window asks for %.0f fps content (%d)\n", want, r);
@@ -2001,11 +2016,25 @@ const char *vk_driver_env_at_start(void) { return g_driver_env_at_start; }
 const char *vk_gpu_name(void) { return g_vk.props.deviceName; }
 #endif
 
+#ifdef __ANDROID__
+// The app to the background and back (SDL sends these from its event pump on this thread, as the activity pauses and
+// resumes, before it blocks: a watch sees them even then): the game stops at its next present meanwhile
+// (nvn/objects.c nvn_background)
+void nvn_background(bool on);
+static bool SDLCALL background_watch(void *user, SDL_Event *e) {
+    (void)user;
+    if (e->type == SDL_EVENT_DID_ENTER_BACKGROUND) nvn_background(true);
+    else if (e->type == SDL_EVENT_WILL_ENTER_FOREGROUND) nvn_background(false);
+    return true;
+}
+#endif
+
 void ui_window_init(void) {
     if (window) return;
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 #ifdef __ANDROID__
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");  // (the back button opens the menu: ui/touch_controls.mm)
+    SDL_AddEventWatch(background_watch, NULL);
 #endif
     settings_load();
 #ifdef __ANDROID__
@@ -2181,6 +2210,19 @@ bool vk_driver_is_turnip(void) {
     }
     return t > 0;
 }
+
+// Mesa's RADV (the Xclipse builds players load: radv-xclipse): the game's memory through its exported file broke the
+// game's first access to it (exec.c vk_heap_file_asked)
+bool vk_driver_is_radv(void) {
+    static int r = -1;
+    if (r < 0 && g_vk.phys) {
+        VkPhysicalDeviceDriverProperties d = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &d};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &p);
+        r = d.driverID == VK_DRIVER_ID_MESA_RADV;
+    }
+    return r > 0;
+}
 #endif
 
 void backend_init(void) {
@@ -2252,6 +2294,8 @@ int ui_run(void) {
         }
         extern void motion_open(void);  // (runtime/hle/motion.c: the phone's sensors, once the setting is on)
         motion_open();
+        extern void input_rumble_apply(void);  // (runtime/hle/input.c: the game's vibration to the controllers)
+        input_rumble_apply();
         menu_apply_window_requests(window);
 #ifdef __ANDROID__
         {   // the pipeline cache to disk now and then while it grows: an app is killed rather than exited, so

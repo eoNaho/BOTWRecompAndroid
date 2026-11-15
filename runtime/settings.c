@@ -40,6 +40,7 @@ Settings g_settings = {
     .touch_controls = true,
     .overlay_pos = {-1, -1},
     .overlay_scale = 75,
+    .vibration = 100,
     .overlay_opacity = 100,
     .overlay_items = OVERLAY_ALL,
     .touch_pos = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1},
@@ -57,10 +58,12 @@ Settings g_settings = {
     .lsfg_mult = 2,
     .lsfg_flow = 75,
     .gpu_heap = -1,
+    .low_ram = -1,
     .inplace_reads = -1,
     .turnip_lrz = -1,
     .event_fps_unlock = false,  // (some events count frames: hle/framepace.c in_event)
     .fps_mode = 1,  // (30: the game's own choice dropped the overworld to 20, where the GPU's clocks settled low)
+    .thermal_cap = true,  // (hle/framepace.c: 60 / 45 fps drop to 30 while the phone is too hot)
     .res_mode = 1,  // (1x: the Switch's 900p scene, the HUD at the screen's resolution - Match display drew the scene at
                     // 2560x1440 on the POCO F7 Ultra: 22 fps)
 #else
@@ -231,8 +234,10 @@ void settings_reset_defaults(void) {
     g_settings.overlay_items = d->overlay_items;
     g_settings.fps_mode = d->fps_mode;
     g_settings.event_fps_unlock = d->event_fps_unlock;
+    g_settings.thermal_cap = d->thermal_cap;
     g_settings.shader_int32 = d->shader_int32;
     g_settings.sync_lag = d->sync_lag;
+    g_settings.low_ram = d->low_ram;
     g_settings.native_code = d->native_code;
     g_settings.files_in_place = d->files_in_place;
 #endif
@@ -282,12 +287,14 @@ void settings_load(void) {
 #ifdef __ANDROID__
         else if (!strcmp(key, "touch_controls")) g_settings.touch_controls = atoi(val) != 0;
         else if (!strcmp(key, "cutscenes_60")) g_settings.event_fps_unlock = atoi(val) != 0;
+        else if (!strcmp(key, "thermal_cap")) g_settings.thermal_cap = atoi(val) != 0;
         else if (!strcmp(key, "frame_rate")) g_settings.fps_mode = !strcmp(val, "30") ? 1 : !strcmp(val, "60") ? 2 : !strcmp(val, "20") ? 3 : !strcmp(val, "45") ? 4 : 0;
         else if (!strcmp(key, "shader_int32")) g_settings.shader_int32 = atoi(val) != 0;
         else if (!strcmp(key, "sync_lag")) g_settings.sync_lag = atoi(val) != 0;
         else if (!strcmp(key, "native_code")) g_settings.native_code = atoi(val) != 0;
         else if (!strcmp(key, "files_in_place")) g_settings.files_in_place = atoi(val) != 0;
         else if (!strcmp(key, "gpu_heap")) g_settings.gpu_heap = !strcmp(val, "auto") ? -1 : atoi(val) != 0;
+        else if (!strcmp(key, "low_ram")) g_settings.low_ram = !strcmp(val, "auto") ? -1 : atoi(val) != 0;
         else if (!strcmp(key, "inplace_reads")) g_settings.inplace_reads = !strcmp(val, "auto") ? -1 : atoi(val) != 0;
         else if (!strcmp(key, "turnip_lrz")) g_settings.turnip_lrz = !strcmp(val, "auto") ? -1 : atoi(val) != 0;
         else if (!strcmp(key, "log_file")) g_settings.log_file = atoi(val) != 0;
@@ -299,6 +306,8 @@ void settings_load(void) {
         else if (!strcmp(key, "touch_drag_camera")) g_settings.touch_drag_camera = atoi(val) != 0;
         else if (!strcmp(key, "touch_drag_sens")) g_settings.touch_drag_sens = (float)atof(val);
         else if (!strcmp(key, "stick_deadzone")) g_settings.stick_deadzone = fminf(fmaxf((float)atof(val), 0), 0.4f);
+        else if (!strcmp(key, "vibration")) g_settings.vibration = atoi(val) < 0 ? 0 : atoi(val) > 100 ? 100 : atoi(val);
+        else if (!strcmp(key, "vibration_phone")) g_settings.vibration_phone = atoi(val) != 0;
         else if (!strcmp(key, "touch_sticks_hidden")) g_settings.touch_sticks_hidden = atoi(val) != 0;
         else if (!strcmp(key, "touch_half_areas")) g_settings.touch_half_areas = atoi(val) != 0;
         else if (!strcmp(key, "touch_layout")) {  // x,y per control (a share of the screen; negative: default)
@@ -395,6 +404,7 @@ void settings_save(void) {
     fprintf(f, "touch_controls = %d\n", g_settings.touch_controls);
     fprintf(f, "frame_rate = %s\n", g_settings.fps_mode == 1 ? "30" : g_settings.fps_mode == 2 ? "60" : g_settings.fps_mode == 3 ? "20" :
                g_settings.fps_mode == 4 ? "45" : "auto");
+    fprintf(f, "thermal_cap = %d\n", g_settings.thermal_cap ? 1 : 0);
     fprintf(f, "cutscenes_60 = %d\n", g_settings.event_fps_unlock);
     fprintf(f, "shader_int32 = %d\nsync_lag = %d\nnative_code = %d\nfiles_in_place = %d\n", g_settings.shader_int32,
             g_settings.sync_lag, g_settings.native_code, g_settings.files_in_place);
@@ -403,12 +413,14 @@ void settings_save(void) {
     fprintf(f, "gpu_heap = %s\ninplace_reads = %s\nturnip_lrz = %s\nlog_file = %d\ngpu_model = %s\n", TRI(g_settings.gpu_heap),
             TRI(g_settings.inplace_reads), TRI(g_settings.turnip_lrz), g_settings.log_file, g_settings.gpu_model);
     fprintf(f, "driver_env = %s\nheap_file = %d\n", g_settings.driver_env, g_settings.heap_file);
+    fprintf(f, "low_ram = %s\n", TRI(g_settings.low_ram));
 #undef TRI
     fprintf(f, "touch_drag_camera = %d\ntouch_drag_sens = %.2f\ntouch_sticks_hidden = %d\ntouch_half_areas = %d\n",
             g_settings.touch_drag_camera, g_settings.touch_drag_sens, g_settings.touch_sticks_hidden,
             g_settings.touch_half_areas);
     fprintf(f, "touch_minimap_top = %d\n", g_settings.touch_minimap_top ? 1 : 0);
     fprintf(f, "stick_deadzone = %.2f\n", g_settings.stick_deadzone);
+    fprintf(f, "vibration = %d\nvibration_phone = %d\n", g_settings.vibration, g_settings.vibration_phone ? 1 : 0);
     fprintf(f, "touch_scale = %.2f\ntouch_opacity = %.2f\ntouch_layout = ", g_settings.touch_scale, g_settings.touch_opacity);
     for (int i = 0; i < TOUCH_NCTL; i++)
         fprintf(f, "%s%.4f,%.4f", i ? "," : "", g_settings.touch_pos[i][0], g_settings.touch_pos[i][1]);

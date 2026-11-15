@@ -68,6 +68,21 @@ static void log_file_line(const char *line) {
     pthread_mutex_unlock(&g_logf_lock);
 }
 
+// The phone's own vibration motor (BOTWRecompAndroidActivity.vibrateDevice): amplitude 1-255 for ms, 0 stops it.
+// From the SDL thread (hle/input.c input_rumble_apply).
+void plat_vibrate(int amplitude, int ms) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!env || !act) return;
+    jclass c = (*env)->GetObjectClass(env, act);
+    static jmethodID m;
+    if (!m) m = (*env)->GetStaticMethodID(env, c, "vibrateDevice", "(II)V");
+    if (m) (*env)->CallStaticVoidMethod(env, c, m, (jint)amplitude, (jint)ms);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, c);
+    (*env)->DeleteLocalRef(env, act);
+}
+
 static int picked_folder_log(bool first) {  // BOTWRecompAndroidActivity.openLog: a descriptor, -1 without a usable folder
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     jobject act = (jobject)SDL_GetAndroidActivity();
@@ -188,6 +203,8 @@ bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
             return false;
         }
         g_guest_lo = base;
+        const char *app = getenv("LARECOMP_APP");  // (the activity: version, versionCode, phone, Android)
+        if (app && *app) fprintf(stderr, "BOTWRecompAndroid %s\n", app);
         fprintf(stderr, "[android] guest window %#llx-%#llx\n", (unsigned long long)base, (unsigned long long)(base + hi - lo));
         const char *last = getenv("LARECOMP_LAST_EXIT");  // (the activity: ApplicationExitInfo)
         if (last && *last) fprintf(stderr, "[android] the last run ended: %s\n", last);
@@ -747,6 +764,8 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
     g_ds.headroom = headroom;
     g_ds.plugged = plugged;
     pthread_mutex_unlock(&g_ds_lock);
+    extern void framepace_thermal_sample(int thermal, float headroom);  // (hle/framepace.c: 30 fps while too hot)
+    framepace_thermal_sample(thermal, headroom);
     // LARECOMP_LOG_POWER=1 (a test, on battery only: on the charger the current is the charger's): the power draw each
     // second with the CPU clusters' clocks, this process's CPU share and the A/B side (LARECOMP_AB)
     static int log_power = -1;
