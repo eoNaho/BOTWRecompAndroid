@@ -597,6 +597,8 @@ static bool android_copy_document(const std::string &uri, const std::string &dst
 extern "C" void android_log_file(bool on);
 extern "C" bool vk_adreno_8xx(const char *name);  // (Driver compatibility's Automatic: runtime/nvn/vulkan/device.c)
 extern "C" bool vk_turnip_heap_on(int setting);
+extern "C" bool vk_inplace_auto(void);  // (Automatic's in-place reads / LRZ for this GPU: vulkan/device.c, LARECOMP_A730)
+extern "C" bool vk_lrz_auto(void);
 extern "C" bool vk_lrz_at_start(void);
 extern "C" const char *vk_driver_env_at_start(void);
 extern "C" bool vk_heap_file_possible(void);
@@ -1819,7 +1821,6 @@ static void prelaunch_tab(float sc) {
     {   // (runtime/settings.h gpu_heap / inplace_reads / turnip_lrz / log_file: for GPUs where a Turnip path draws wrong;
         // LASRecompAndroid's, with BOTW's in-place reads of draw targets)
         bool changed = false;
-        const bool a8 = vk_adreno_8xx(vk_gpu_name());  // (Automatic: on for Adreno 8xx only)
         auto tri = [&](const char *id, int *v, bool auto_on) {  // Automatic / On / Off: -1 / 1 / 0; auto_on: Automatic's choice
             bool ch = false;
             ImGui::PushID(id);
@@ -1856,13 +1857,13 @@ static void prelaunch_tab(float sc) {
             ImGui::TextDisabled("%s", tr("This driver can't export its memory: the option does nothing here."));
         ImGui::Spacing();
         ImGui::Text("%s", tr("Draw-target reads in place (Turnip)"));
-        changed |= tri("inplace", &g_settings.inplace_reads, a8);
+        changed |= tri("inplace", &g_settings.inplace_reads, vk_inplace_auto());
         ImGui::TextDisabled("%s", tr("On: decals and effects read the image they draw on as it is, the fastest way. Off: a copy "
                                   "of it each time, slower (fewer fps) but by the Vulkan rules. Automatic: on for Adreno 8xx "
                                   "GPUs, off for the others. Applies when the game starts."));
         ImGui::Spacing();
         ImGui::Text("%s", tr("Turnip low-resolution Z (LRZ)"));
-        changed |= tri("lrz", &g_settings.turnip_lrz, a8);
+        changed |= tri("lrz", &g_settings.turnip_lrz, vk_lrz_auto());
         ImGui::TextDisabled("%s", tr("Turnip's early depth test, a little faster. Off can fix missing or broken drawing on "
                                   "some Adreno GPUs. Automatic: on for Adreno 8xx GPUs, off for the others. Applies when "
                                   "BOTWRecompAndroid restarts."));
@@ -1874,7 +1875,7 @@ static void prelaunch_tab(float sc) {
         ImGui::TextDisabled("%s", tr("Advanced: switches the Vulkan driver reads when it starts, as NAME=value, separated by "
                                   "spaces. Leave it empty unless a guide for your phone tells you which ones. Applies when "
                                   "BOTWRecompAndroid restarts."));
-        bool lrz_now = g_settings.turnip_lrz < 0 ? a8 : g_settings.turnip_lrz != 0;
+        bool lrz_now = g_settings.turnip_lrz < 0 ? vk_lrz_auto() : g_settings.turnip_lrz != 0;
         if (lrz_now != vk_lrz_at_start() || strcmp(g_settings.driver_env, vk_driver_env_at_start())) {  // (read once, at the start)
             ImGui::Text("%s", tr("Restart BOTWRecompAndroid to apply it."));
             ImGui::SameLine();

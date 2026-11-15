@@ -920,10 +920,14 @@ static void uclamp_min_thread(void) {
 // cores. Left to the scheduler on a Galaxy Tab A9+ (Snapdragon 695: 2 x A78, 6 x A55) it sat on a little core,
 // 90 ms a frame translating the world, while the game's thread had a big one (2026-11-08). Default: on low RAM
 // (vulkan/exec.c vk_low_ram - the weak phones); LARECOMP_RENDER_BIG=1 / 0.
+// LARECOMP_RENDER_BIG=2: not only the cores at the top clock but every core within 80% of it. On a Snapdragon 8 Gen 1
+// (1 x X2 at ~3.0 GHz, 3 x A710 at ~2.5, 4 x A510 at ~1.8) "the fastest" is a single core, the one the game's main
+// thread wants too; 2 gives the render thread the X2 and the A710s (4 cores) and keeps it off the A510s.
 void plat_render_thread_pin(void) {
     const char *e = getenv("LARECOMP_RENDER_BIG");
     extern bool vk_low_ram(void);
     if (e ? !atoi(e) : !vk_low_ram()) return;
+    const bool wide = e && atoi(e) == 2;
     long best = 0, mhz[64] = {0};
     int n = 0;
     for (int c = 0; c < 64; c++) {
@@ -936,17 +940,19 @@ void plat_render_thread_pin(void) {
         if (mhz[c] > best) best = mhz[c];
         n = c + 1;
     }
+    const long floor_khz = wide ? best * 8 / 10 : best;
     cpu_set_t set;
     CPU_ZERO(&set);
     int k = 0;
     for (int c = 0; c < n; c++)
-        if (mhz[c] == best) {
+        if (mhz[c] > 0 && mhz[c] >= floor_khz) {
             CPU_SET(c, &set);
             k++;
         }
     if (!best || k == 0 || k == n) return;
     int r = sched_setaffinity(0, sizeof set, &set);
-    LOG("[android] render thread on the %d fastest cores (%ld MHz): %s\n", k, best / 1000, r ? strerror(errno) : "ok");
+    LOG("[android] render thread on the %d %s cores (>= %ld MHz): %s\n", k, wide ? "fast" : "fastest", floor_khz / 1000,
+        r ? strerror(errno) : "ok");
 }
 
 void plat_thread_unpin(void) {

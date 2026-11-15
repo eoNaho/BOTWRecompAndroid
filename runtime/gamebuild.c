@@ -303,6 +303,23 @@ static void add_unit(Units *us, const char *src, const char *work, const char *s
 
 // The flags the game code was built with (GAMELIB_CFLAGS, part of its id). zig cc reads -march=<cpu> with its own CPU
 // names (x86_64_v3) and takes "-<feature>" off the end, so x86-64-v3 would be CPU "x86": the same CPU as -mcpu there.
+// LARECOMP_GAMELIB_MCPU=<cpu> (opt-in): the game code scheduled for this CPU, e.g. cortex-a710 for a Snapdragon 8 Gen 1
+// (zig and clang spell it cortex_a710 / cortex-a710; either is taken). Part of the build's stamp, so setting or changing it
+// rebuilds the game code (10-15 min on a phone). The generated C is mostly loads and stores on a register struct: expect
+// a small gain (-O2 and -O3 did not help either, see docs/DESEMPENHO-60FPS). Anything but letters, digits and - _ . + is
+// ignored.
+static const char *gamelib_mcpu(void) {
+    static char cpu[64];
+    const char *e = getenv("LARECOMP_GAMELIB_MCPU");
+    if (!e || !*e || strlen(e) >= sizeof cpu) return NULL;
+    for (const char *p = e; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' ||
+              *p == '.' || *p == '+'))
+            return NULL;
+    snprintf(cpu, sizeof cpu, "%s", e);
+    return cpu;
+}
+
 static void add_cflags(Args *a, const Tools *t) {
     char buf[1024];
     snprintf(buf, sizeof buf, "%s", GAMELIB_CFLAGS);
@@ -315,6 +332,12 @@ static void add_cflags(Args *a, const Tools *t) {
         } else {
             add(a, f);
         }
+    }
+    if (gamelib_mcpu()) {
+        char cpu[128];
+        snprintf(cpu, sizeof cpu, "-mcpu=%s", gamelib_mcpu());
+        for (char *c = cpu + 6; *c; c++) *c = t->zig ? (*c == '-' ? '_' : *c) : (*c == '_' ? '-' : *c);
+        add(a, cpu);  // (after the generic flags: the last -mcpu counts)
     }
 }
 
@@ -484,6 +507,7 @@ static PlatProc start_compile(const Tools *t, const Unit *u) {
 static void build_stamp(const char *game_dir, char *out, size_t n) {
     uint32_t h = 2166136261u;  // (FNV-1a)
     for (const char *s = GAMELIB_CFLAGS; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    if (gamelib_mcpu()) for (const char *s = gamelib_mcpu(); *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;  // (a new CPU: a new build)
     int k = snprintf(out, n, "%s %08x", GAMELIB_ID, h);
     static const char *const mods[2] = {"main", "sdk"};
     for (int m = 0; m < 2 && k > 0 && (size_t)k < n; m++) {

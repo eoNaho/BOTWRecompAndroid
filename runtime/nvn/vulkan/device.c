@@ -1998,8 +1998,35 @@ bool vk_adreno_8xx(const char *name) {
     int n = atoi(a);
     return n >= 800 && n < 900;
 }
+// The Adreno 730 of the Snapdragon 8 / 8+ Gen 1. Under Turnip it can be named "Adreno (TM) 725" (issue #76), the kernel
+// calls it "Adreno730v1": both count. Not the whole 7xx family: the Adreno 750 striped the terrain with in-place reads
+// (issue #129), so every other 7xx stays on the safe paths.
+bool vk_adreno_730_class(const char *name) {
+    const char *a = name ? strstr(name, "Adreno") : NULL;
+    if (!a) return false;
+    while (*a && (*a < '0' || *a > '9')) a++;
+    int n = atoi(a);
+    return n == 725 || n == 730;
+}
+// LARECOMP_A730=<list> (opt-in, off by default; also settable in the start screen's driver variables): which 8xx fast
+// paths Automatic also takes on an Adreno 730 - "inplace" (draws sample the targets they write, as they are: the
+// biggest gain on the 830, 31 -> 40 fps) and/or "lrz" (Turnip's low-resolution Z) - or "all". Unverified on a 730:
+// test one at a time, with the terrain in view (decals read the targets they write).
+static bool a730_opt(const char *what, const char *gpu) {
+    const char *e = getenv("LARECOMP_A730");
+    if (!e || !*e || !vk_adreno_730_class(gpu)) return false;
+    return !strcmp(e, "all") || strstr(e, what) != NULL;
+}
 // A Turnip path's setting (-1 Automatic, 1 on, 0 off) for this GPU
-bool vk_turnip_path_on(int setting) { return setting < 0 ? vk_adreno_8xx(g_vk.props.deviceName) : setting != 0; }
+bool vk_turnip_path_on(int setting) {
+    if (setting >= 0) return setting != 0;
+    return vk_adreno_8xx(g_vk.props.deviceName) || a730_opt("inplace", g_vk.props.deviceName);
+}
+// Automatic's LRZ choice for a GPU named as above (the kernel's name before Vulkan starts, else the last start's)
+static bool lrz_auto(const char *model) { return !model[0] || vk_adreno_8xx(model) || a730_opt("lrz", model); }
+// Whether Automatic turns the in-place reads on for this GPU (the start screen's label)
+bool vk_inplace_auto(void) { return vk_turnip_path_on(-1); }
+bool vk_lrz_auto(void) { return lrz_auto(g_settings.gpu_model); }
 // gpu_heap's: Automatic is on wherever Turnip can place the heap. Off on a Turnip Adreno 7xx (an Adreno 732, which
 // Turnip names "Adreno (TM) 735": PR #103), the game's text glyphs (a buffer ~2.7 GB into the 3 GB heap, past Turnip's
 // 128 MB storage range) read as zeros - every menu, dialogue and item name blank. Only the heap: 0.2.5 widened
@@ -2069,7 +2096,7 @@ void ui_window_init(void) {
             }
             if (!model[0]) snprintf(model, sizeof model, "%s", g_settings.gpu_model);
         }
-        if (lrz < 0) lrz = !model[0] || vk_adreno_8xx(model);
+        if (lrz < 0) lrz = lrz_auto(model);
         {   // #32: on the Adreno 840 and up (Mesa's a8xx, the Turnip Gen8 drivers from V30), shadowed ground turns red -
             // ir3 moving a shader's uniform buffer into its constants reads a draw's constants stale. With that off: no
             // tint and the same ~40 fps (a Z Fold 8). An IR3_SHADER_DEBUG from the driver variables wins.
