@@ -112,6 +112,7 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
             REQ_DRIVER_RECOVER = 0x4c48, REQ_SAVE_IN = 0x4c49, REQ_SAVE_OUT = 0x4c4a, REQ_SAVE_IN_TREE = 0x4c4c,
             REQ_DLC = 0x4c4d, REQ_CONTAINER_INSPECT = 0x4c4e, REQ_PROD_KEYS = 0x4c4f,
             REQ_CONTAINER_IMPORT = 0x4c50, REQ_CONTAINER_DLC = 0x4c51;
+    private static volatile boolean continueGameImportAfterKeys;
     private native String nativeBuildDlc(String[] paths, long[] sizes);
     private static native String nativeInstallDlcImage(String path);
     private static native boolean nativeHasDlcImage();
@@ -315,6 +316,7 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
                 self.startActivityForResult(i, REQ_PROD_KEYS);
             } catch (Exception e) {
                 Log.e(TAG, "prod.keys picker", e);
+                continueGameImportAfterKeys = false;
                 self.showSwitchImportResult("Could not open the file picker: " + e.getMessage());
             }
         });
@@ -339,6 +341,17 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
             } catch (Exception e) {
                 Log.e(TAG, "NSP/XCI picker", e);
                 self.showSwitchImportResult("Could not open the file picker: " + e.getMessage());
+            }
+        });
+    }
+
+    // First-run users choose prod.keys once, then go straight to the game archive.
+    public static void startSwitchGameImport() {
+        self.runOnUiThread(() -> {
+            if (self.prodKeysFile().isFile()) pickSwitchArchive();
+            else {
+                continueGameImportAfterKeys = true;
+                pickProdKeys();
             }
         });
     }
@@ -458,6 +471,7 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
         if (req == REQ_PROD_KEYS) {
             Uri file = result == Activity.RESULT_OK && data != null ? data.getData() : null;
             if (file != null) new Thread(() -> saveProdKeys(file), "prod-keys").start();
+            else continueGameImportAfterKeys = false;
             return;
         }
         if (req == REQ_CONTAINER_IMPORT) {
@@ -596,9 +610,15 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
                 throw new IOException("prod.keys is missing a valid 64-digit header_key.");
             File dest = prodKeysFile();
             Os.rename(staged.getAbsolutePath(), dest.getAbsolutePath());
-            runOnUiThread(() -> showSwitchImportResult("prod.keys saved in the app's private storage."));
+            boolean continueImport = continueGameImportAfterKeys;
+            continueGameImportAfterKeys = false;
+            runOnUiThread(() -> {
+                if (continueImport) pickSwitchArchive();
+                else showSwitchImportResult("prod.keys saved in the app's private storage.");
+            });
         } catch (Exception e) {
             staged.delete();
+            continueGameImportAfterKeys = false;
             Log.e(TAG, "save prod.keys", e);
             String why = e.getMessage() == null ? e.toString() : e.getMessage();
             runOnUiThread(() -> showSwitchImportResult("Could not save prod.keys.\n\n" + why));

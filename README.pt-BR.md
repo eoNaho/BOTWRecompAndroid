@@ -124,12 +124,13 @@ Desde a **0.2.12-beta**, enquanto você joga no mundo, os controles de toque mos
 
 ### Importar NSP/XCI (experimental)
 
-Em **Arquivos do jogo**, toque em **Escolher prod.keys** e depois em **Importar NSP/XCI**. Selecione o jogo base e,
-para instalar uma atualização, selecione os arquivos do jogo base e do update juntos no seletor. O update precisa do
-jogo base correspondente. A importação exige espaço temporário para os arquivos selecionados e para a imagem resultante;
+Em **Arquivos do jogo**, toque em **Importar de NSP/XCI**. Na primeira vez, o app pedirá o `prod.keys` e abrirá o seletor
+do jogo em seguida. Selecione o jogo base e, para instalar uma atualização, selecione os dois arquivos juntos. O update
+precisa do jogo base correspondente. As opções para gerenciar as chaves e inspecionar arquivos ficam em **Mais opções
+de importação**. A importação exige espaço temporário para os arquivos selecionados e para a imagem resultante;
 o app confere o espaço antes de extrair. Tickets personalizados ainda não são aceitos.
 
-Para o Passe de Expansão, use **Importar DLC NSP/XCI** e escolha o pacote que contém os dados maiores de
+Para o Passe de Expansão, abra **Mais opções de importação > Importar Passe de Expansão de NSP/XCI** e escolha o pacote que contém os dados maiores de
 `01007EF00011F001`. Eles são usados pelas duas DLCs; o pacote `01007EF00011F002` contém apenas o desbloqueio e não
 pode ser importado sozinho. Use o jogo na versão 1.6.0 ou mais recente. **Apagar prod.keys salvo** remove a cópia das
 chaves armazenada pelo app.

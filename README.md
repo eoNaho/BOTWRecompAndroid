@@ -120,12 +120,13 @@ icons read from your game files. The game's menus keep the classic buttons.
 
 ### Importing NSP/XCI files (experimental)
 
-In **Game Files**, choose **Choose prod.keys**, then **Import NSP/XCI**. Select the base game and, if using an update,
-select the base and update files together in the picker. An update cannot be installed without its matching base game.
+In **Game Files**, choose **Import from NSP/XCI**. The first time, the app asks for `prod.keys` and then opens the game
+picker. Select the base game and, if using an update, select both files together. An update cannot be installed without
+its matching base game. Key management and archive inspection are under **More import options**.
 The import needs temporary space for the selected game and update plus the resulting image; the app checks the space
 available before extraction. A personalized ticket is not supported.
 
-For the Expansion Pass, choose **Import DLC NSP/XCI** and select the package containing the larger
+For the Expansion Pass, open **More import options > Import Expansion Pass from NSP/XCI** and select the package containing the larger
 `01007EF00011F001` data pack. It provides the data used by both add-ons; the separate `01007EF00011F002` package is
 only an unlock and cannot be imported alone. Use game version 1.6.0 or newer. **Delete saved prod.keys** removes the
 app's stored copy of the key file.

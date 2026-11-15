@@ -2030,7 +2030,6 @@ static void prelaunch_tab(float sc) {
             pthread_mutex_unlock(&g_lock);
             android_call("pickDlcFolder");  // (then importDlc -> nativeBuildDlc -> nativeDlcDone)
         }
-        if (ImGui::Button(tr("Import DLC NSP/XCI"))) android_call("pickSwitchDlcArchive");
         if (have) {
             ImGui::SameLine();
             if (ImGui::Button(tr("Remove DLC"))) {
@@ -2594,25 +2593,31 @@ extern "C" void launcher_run(const char *root) {
                     }
                 }
 #endif
-                if (busy) opt_disable_next();
+                opt_section("Import game");
 #ifdef __ANDROID__
+                if (busy) opt_disable_next();
+                if (opt_action("Import from NSP/XCI", "", "Choose your base game. If you have an update, select it in the same picker. The first time, the app asks for prod.keys and then continues here.", true))
+                    android_call("startSwitchGameImport");
+                if (busy) opt_disable_next();
                 if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
                     android_call(g_settings.files_in_place ? "pickGameFolderInPlace" : "pickGameFolder");
-                if (busy) opt_disable_next();
-                if (opt_action("Choose prod.keys", "", "The key file is copied only into BOTWRecompAndroid's private app storage.", true))
-                    android_call("pickProdKeys");
-                if (busy) opt_disable_next();
-                if (opt_action("Delete saved prod.keys", "", "Remove the saved key file from this app.", true))
-                    android_call("deleteProdKeys");
-                if (busy) opt_disable_next();
-                if (opt_action("Import NSP/XCI", "", "Select the base game and optionally its update together.", true))
-                    android_call("pickSwitchArchive");
-                if (busy) opt_disable_next();
-                if (opt_action("Import DLC NSP/XCI", "", "Install the Expansion Pass data from an NSP or XCI.", true))
-                    android_call("pickSwitchDlcArchive");
-                if (busy) opt_disable_next();
-                if (opt_action("Inspect NSP/XCI", "", "List PFS0/HFS0 entries without extracting them.", true))
-                    android_call("inspectSwitchContainer");
+                static bool show_import_options = false;
+                if (opt_action("More import options", "", "Manage prod.keys, inspect an archive, or import the Expansion Pass.", true))
+                    show_import_options = !show_import_options;
+                if (show_import_options) {
+                    if (busy) opt_disable_next();
+                    if (opt_action("Choose prod.keys", "", "Replace the key file saved in this app's private storage.", true))
+                        android_call("pickProdKeys");
+                    if (busy) opt_disable_next();
+                    if (opt_action("Delete saved prod.keys", "", "Remove the saved key file from this app.", true))
+                        android_call("deleteProdKeys");
+                    if (busy) opt_disable_next();
+                    if (opt_action("Inspect NSP/XCI", "", "List PFS0/HFS0 entries without extracting them.", true))
+                        android_call("inspectSwitchContainer");
+                    if (busy) opt_disable_next();
+                    if (opt_action("Import Expansion Pass from NSP/XCI", "", "Install your DLC data pack from an NSP or XCI.", true))
+                        android_call("pickSwitchDlcArchive");
+                }
 #else
                 if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
                     SDL_ShowOpenFolderDialog(picked, NULL, win, NULL, false);
