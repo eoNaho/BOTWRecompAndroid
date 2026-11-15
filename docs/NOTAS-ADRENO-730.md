@@ -17,3 +17,11 @@ Só vale para o Turnip feito para A7xx (os builds "A8xx" derrubaram um 8+ Gen 1:
 mostra "(ligado nesta GPU)" quando uma dessas opções está valendo.
 
 Para medir: `LARECOMP_AB=<quadros>:<chave>` alterna uma chave dentro da mesma rodada, no mesmo calor.
+
+## Rodada automática (PC com adb)
+
+`android/run_730_ab.sh [segundos]` roda cada opção num ciclo, com uma rodada base entre elas (o calor desloca mais que a
+maioria das opções: compare cada uma com a base ao lado). A última rodada, `diag`, liga `LARECOMP_FRAME_TIMELINE` e
+`LARECOMP_LOG_GPU_IDLE` e deixa em `android/out/boot-diag.log` onde o quadro gasta tempo (CPU do jogo, thread de render
+ou GPU), informação para decidir se vale mexer na GPU ou na CPU. Só vale para a 1.9.0 se você usar o benchmark embutido
+(`LARECOMP_BENCHMARK`, `tools/benchmark-scenes.txt`) em vez do save scriptado.
